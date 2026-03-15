@@ -1,0 +1,61 @@
+[
+  {
+    "nome": "APTANUTRI PREMIUM 3 800G",
+    "ean": "7891025107910",
+    "links": [
+      "https://amazon.com.br/dp/B07M73V8JD",
+      "https://www.paguemenos.com.br/aptanutri-3-premium-800g/p",
+      "https://www.panvel.com/panvel/formula-infantil-aptanutri-premium-3-800g/p-485500"
+    ]
+  },
+  {
+    "nome": "APTANUTRI PROFUTURA 3 800G",
+    "ean": "7891025118763",
+    "links": [
+      "https://amazon.com.br/dp/B08Y1Z25MG",
+      "https://www.paguemenos.com.br/formula-infantil-aptanutri-profutura-3-800g/p",
+      "https://www.panvel.com/panvel/formula-infantil-aptanutri-profutura-3-800g/p-111004"
+    ]
+  },
+  {
+    "nome": "APTANUTRI SOJA X 800G",
+    "ean": "7795323776116",
+    "links": [
+      "https://amazon.com.br/dp/B0D292HCS7",
+      "https://www.paguemenos.com.br/formula-infantil-danone-aptanutri-soja-1-a-3-anos-800g/p",
+      "https://www.panvel.com/panvel/formula-infantil-aptanutri-soja-3-800g/p-94021"
+    ]
+  },
+  {
+    "nome": "PACK APTANUTRI 3 PREMIUM 4UN 800G",
+    "ean": "7891025124894",
+    "links": [
+      "https://amazon.com.br/dp/B0D4NN2W72",
+      "https://www.paguemenos.com.br/kit-primeira-infancia-aptanutri-premium-3-800g-1-a-3-anos-4-unidades/p",
+      "https://www.panvel.com/panvel/kit-formula-infantil-aptanutri-3-premium-4-unidades-800g-cada/p-92484"
+    ]
+  },
+  {
+    "nome": "PACK APTANUTRI 3 PROFUTURA 4UN 800G",
+    "ean": "7891025125105",
+    "links": [
+      "https://amazon.com.br/dp/B0F9XFKJMF"
+    ]
+  },
+  {
+    "nome": "PROMOPACK DESCONTO APTANUTRI PREMIUM 800G X2",
+    "ean": "7891025123934",
+    "links": [
+      "https://www.paguemenos.com.br/aptanutri-premium-2-unidades-de-800g-cada-30porcento-de-desconto-na-2-unidade/p",
+      "https://www.panvel.com/panvel/kit-formula-infantil-aptanutri-premium-800g-2-unidades/p-98775"
+    ]
+  },
+  {
+    "nome": "PACK BRINDE APTANUTRI BANHO DE LUA",
+    "ean": "7891025125174",
+    "links": [
+      "https://www.paguemenos.com.br/pack-aptanutri-profutura-800g-cada-mais-brinde-livrinho-de-banho/p",
+      "https://www.panvel.com/panvel/kit-formula-infantil-aptanutri-profutura-3-com-2-unidades-800g-cada-livro-turmatube/p-87786"
+    ]
+  }
+]
