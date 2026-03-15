@@ -215,12 +215,19 @@ def buscar_paguemenos(link):
             v = limpar_preco(p)
             if v:
                 precos_vals.append(v)
-        m_pct = re.search(r'(\d+)\s*%\s*OFF', txt, re.IGNORECASE)
-        if m_pct and len(precos_vals) >= 2:
-            preco_original = precos_vals[0]
-            preco          = precos_vals[-1]
-            pct            = int(m_pct.group(1))
-            promocao       = f"DE/POR — {pct}% off"
+
+        tem_off = bool(re.search(r'%\s*OFF', txt, re.IGNORECASE))
+
+        if tem_off and len(precos_vals) >= 2:
+            # Calcula o desconto a partir dos dois preços
+            # Evita parsear "9914%" quando o % fica colado ao preço anterior
+            orig  = precos_vals[0]
+            final = precos_vals[-1]
+            pct   = round((1 - final / orig) * 100)
+            if 1 <= pct <= 99:
+                preco_original = orig
+                preco          = final
+                promocao       = f"DE/POR — {pct}% off"
         elif precos_vals and not preco:
             preco = precos_vals[0]
 
