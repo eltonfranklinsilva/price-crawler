@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 #  Cadastro gratuito em: https://www.scraperapi.com
 #  Plano Free: 5.000 requisições/mês (suficiente para uso diário)
 # ═══════════════════════════════════════════════════════════════
-SCRAPERAPI_KEY = "SUA_CHAVE_AQUI"   # ← cole sua chave aqui depois de cadastrar
+SCRAPERAPI_KEY = "3a4f98804a2b98772342d286824afcd2"   # ← cole sua chave aqui depois de cadastrar
 
 HEADERS = {
     "User-Agent": (
