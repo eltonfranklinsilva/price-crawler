@@ -30,9 +30,9 @@ HEADERS_HTML = {
 def limpar_preco(v):
     if v is None:
         return None
-    s = str(v).replace("R$","").replace("\xa0","").replace(" ","").strip()
+    s = str(v).replace("R$", "").replace("\xa0", "").replace(" ", "").strip()
     s = re.sub(r"\.(?=\d{3}[,.])", "", s)
-    s = s.replace(",",".")
+    s = s.replace(",", ".")
     s = re.sub(r"[^\d.]", "", s)
     try:
         f = float(s)
@@ -54,6 +54,7 @@ PADROES_PROMO = [
      lambda m: "Acompanha brinde"),
 ]
 
+
 def detectar_promocao(texto):
     if not texto:
         return None
@@ -70,10 +71,10 @@ def detectar_promocao(texto):
 
 def _price_unit_e_divisao(preco_unit, preco_total, tolerancia=0.02):
     """
-    Retorna True se pricePerUnit for apenas a divisão matemática
-    do preço total por N itens (N entre 2 e 6).
-    Ex: total=140, pricePerUnit=70 → 140/2=70 → é divisão, não promoção.
-    Ex: total=77,  pricePerUnit=54.9 → não bate em nenhuma divisão → é promoção real.
+    Retorna True se pricePerUnit for apenas a divisao matematica
+    do preco total por N itens (N entre 2 e 6).
+    Ex: total=140, pricePerUnit=70 -> 140/2=70 -> e divisao, nao promocao.
+    Ex: total=77,  pricePerUnit=54.9 -> nao bate em nenhuma divisao -> e promocao real.
     """
     if not preco_unit or not preco_total:
         return False
@@ -86,19 +87,6 @@ def _price_unit_e_divisao(preco_unit, preco_total, tolerancia=0.02):
 
 # ═══════════════════════════════════════════════════════════════
 #  PANVEL
-#
-#  Tipo A — DE/POR: tag="PROMOTION" + promotionId
-#    → preço = total das parcelas
-#    → pricePerUnit ignorado
-#
-#  Tipo B — Leve Mais: sem tag, sem promotionId
-#    + pricePerUnit NÃO é divisão exata do total por N
-#    → preço = pricePerUnit (preço por unidade na promoção)
-#
-#  Tipo C — Sem promoção: sem tag, sem promotionId
-#    + pricePerUnit É divisão exata do total por N (ou ausente)
-#    → preço = total das parcelas
-#    → promocao = None
 # ═══════════════════════════════════════════════════════════════
 def buscar_panvel(link):
     try:
@@ -110,30 +98,27 @@ def buscar_panvel(link):
 
     m = re.search(r'p-(\d+)$', link.rstrip('/'))
     if not m:
-        print(f"  [Panvel] ID não encontrado na URL")
+        print(f"  [Panvel] ID nao encontrado na URL")
         return None
     pid = m.group(1)
 
     chave = f'"G.json.api/v2/catalog/{pid}?type=SSR"'
     idx   = html.find(chave)
     if idx == -1:
-        print(f"  [Panvel] Bloco JSON não encontrado")
+        print(f"  [Panvel] Bloco JSON nao encontrado")
         return None
 
     trecho = html[max(0, idx - 3000):idx]
 
-    # ── Tipo de promoção ─────────────────────────────────────
     is_de_por = '"PROMOTION"' in trecho and bool(
         re.search(r'"promotionId"\s*:\s*\d+', trecho)
     )
 
-    # ── pricePerUnit ─────────────────────────────────────────
     preco_unit = None
     m_pu = re.search(r'"pricePerUnit"\s*:\s*([\d.]+)', trecho)
     if m_pu:
         preco_unit = limpar_preco(m_pu.group(1))
 
-    # ── Preço total via parcelas ─────────────────────────────
     preco_parcelas = None
     m_inst = re.search(
         r'"installments"\s*:\s*"ou\s*(\d+)x\s*de\s*R\$[\xa0\s]*([\d,.]+)"',
@@ -145,28 +130,22 @@ def buscar_panvel(link):
         if parc:
             preco_parcelas = round(parc * qtd, 2)
 
-    # ── Decide tipo e preço ──────────────────────────────────
     if is_de_por:
-        # Tipo A: DE/POR — usa preço total, ignora pricePerUnit
         preco    = preco_parcelas
         promocao = "DE/POR"
-
     elif preco_unit and not _price_unit_e_divisao(preco_unit, preco_parcelas):
-        # Tipo B: Leve Mais — pricePerUnit é menor que qualquer divisão simples
-        # Logo é um preço especial de bundle, não divisão matemática
         preco    = preco_unit
         promocao = "Leve mais, pague menos"
-
     else:
-        # Tipo C: sem promoção — usa preço total das parcelas
         preco    = preco_parcelas
         promocao = None
 
     if not preco:
-        print(f"  [Panvel] Nenhum preço encontrado")
+        preco = preco_unit or preco_parcelas
+    if not preco:
+        print(f"  [Panvel] Nenhum preco encontrado")
         return None
 
-    # ── Nome do produto ──────────────────────────────────────
     nome = None
     m_nome = re.search(
         rf'"G\.json\.api/v2/catalog/{pid}\?type=SSR"\s*:\s*\{{"body"\s*:\s*\{{[^{{}}]{{0,50}}"name"\s*:\s*"([^"]+)"',
@@ -179,8 +158,8 @@ def buscar_panvel(link):
         title = soup.find("title")
         if title:
             nome = title.get_text(strip=True)\
-                        .replace(" | Panvel Farmácias","")\
-                        .replace(" | Panvel","").strip()
+                        .replace(" | Panvel Farmacias", "")\
+                        .replace(" | Panvel", "").strip()
     nome = (nome or "Produto Panvel")[:120]
 
     return {
@@ -195,16 +174,6 @@ def buscar_panvel(link):
 
 # ═══════════════════════════════════════════════════════════════
 #  PAGUE MENOS
-#
-#  A API VTEX retorna [] — slug não funciona para esses produtos.
-#  Extrai preço e desconto do bloco [class*='pdp-custom']:
-#    → sem desconto: "...R$ 76,49Quantidade..."
-#    → com DE/POR:   "...R$ 259,9914% OFFR$ 223,90Quantidade..."
-#
-#  Badge "-50% na 2ª unidade" só existe após JS — não capturável
-#  no HTML estático sem ScraperAPI render=true (plano pago).
-#  Fallback: tenta productClusters no __STATE__ para detectar
-#  se há promoção ativa mesmo sem saber o valor exato.
 # ═══════════════════════════════════════════════════════════════
 def buscar_paguemenos(link):
     try:
@@ -215,12 +184,11 @@ def buscar_paguemenos(link):
         print(f"  [Pague Menos] Erro: {e}")
         return None
 
-    nome  = None
-    preco = None
+    nome           = None
+    preco          = None
     preco_original = None
-    promocao = None
+    promocao       = None
 
-    # ── Preço via JSON-LD (mais confiável) ───────────────────
     for tag in soup.find_all("script", type="application/ld+json"):
         try:
             d = json.loads(tag.string or "")
@@ -239,22 +207,16 @@ def buscar_paguemenos(link):
         except Exception:
             continue
 
-    # ── Bloco pdp-custom: detecta DE/POR com % explícito ────
-    # Ex: "R$ 259,9914% OFFR$ 223,90" → DE/POR 14% off
     bloco = soup.select_one("[class*='pdp-custom']")
     if bloco:
         txt = bloco.get_text(strip=True)
-
         precos_vals = []
         for p in re.findall(r'R\$\s*([\d\.]+,\d{2})', txt):
             v = limpar_preco(p)
             if v:
                 precos_vals.append(v)
-
         m_pct = re.search(r'(\d+)\s*%\s*OFF', txt, re.IGNORECASE)
-
         if m_pct and len(precos_vals) >= 2:
-            # Tem DE/POR explícito no bloco
             preco_original = precos_vals[0]
             preco          = precos_vals[-1]
             pct            = int(m_pct.group(1))
@@ -263,19 +225,14 @@ def buscar_paguemenos(link):
             preco = precos_vals[0]
 
     if not preco:
-        print(f"  [Pague Menos] Preço não encontrado")
+        print(f"  [Pague Menos] Preco nao encontrado")
         return None
 
-    # ── Detecta promoção de unidade via __STATE__ ────────────
-    # Teasers no __STATE__ são referências — tenta extrair o
-    # nome real do teaser que indica promoção de 2ª unidade
     if not promocao:
         for s in soup.find_all("script"):
             txt_s = s.string or ""
             if "commertialOffer" not in txt_s:
                 continue
-
-            # Formato: "Teaser:XXXX":{"name":"30% off na 2ª unidade",...}
             m_t = re.search(
                 r'"Teaser:[^"]+"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"',
                 txt_s
@@ -285,8 +242,6 @@ def buscar_paguemenos(link):
                 if raw and not raw.startswith("$"):
                     promocao = detectar_promocao(raw) or raw[:80]
                     break
-
-            # Formato alternativo: "teaserName":"..."
             m_t2 = re.search(r'"teaserName"\s*:\s*"([^"]+)"', txt_s)
             if m_t2:
                 raw = m_t2.group(1).strip()
@@ -294,26 +249,19 @@ def buscar_paguemenos(link):
                     promocao = detectar_promocao(raw) or raw[:80]
                     break
 
-    # ── Fallback: productClusters indicam promo ativa ────────
-    # Quando Teasers não têm nome acessível, os clusters revelam
-    # se há promoção de 2ª unidade ativa (ex: "50% na 2un")
     if not promocao:
         clusters = re.findall(
             r'"productClusters\.\d+"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"',
             html
         )
-        palavras_promo = ['%', 'off', 'desconto', 'leve', 'pague', 'brinde', 'unidade', 'un']
         for c in clusters:
             c_lower = c.lower()
-            # Ignora clusters que são categorias (ex: "Nutrição Infantil")
-            # Aceita apenas os que claramente indicam mecânica promocional
-            if (any(p in c_lower for p in palavras_promo) and
-                    any(c.isdigit() for c in c_lower)):
+            if (any(p in c_lower for p in ['%', 'off', 'desconto', 'leve', 'pague', 'brinde', 'unidade', 'un'])
+                    and any(ch.isdigit() for ch in c_lower)):
                 promo_detectada = detectar_promocao(c)
                 if promo_detectada:
                     promocao = promo_detectada
                     break
-                # Se não detectou padrão mas claramente é promo, indica genericamente
                 elif re.search(r'\d+\s*%', c_lower):
                     promocao = c[:80]
                     break
@@ -334,13 +282,12 @@ def buscar_paguemenos(link):
 
 # ═══════════════════════════════════════════════════════════════
 #  AMAZON
-#  Badge só capturado se contiver indicação real de desconto
 # ═══════════════════════════════════════════════════════════════
 def buscar_amazon(link):
     link = link.replace("https://amazon.com.br", "https://www.amazon.com.br")
 
     if not SCRAPERAPI_KEY or SCRAPERAPI_KEY == "SUA_CHAVE_AQUI":
-        print(f"  [Amazon] ScraperAPI não configurado — pulando")
+        print(f"  [Amazon] ScraperAPI nao configurado — pulando")
         return None
 
     fetch_url = (
@@ -389,7 +336,7 @@ def buscar_amazon(link):
                 continue
 
     if not preco:
-        print(f"  [Amazon] Preço não encontrado")
+        print(f"  [Amazon] Preco nao encontrado")
         return None
 
     preco_original = None
@@ -405,7 +352,6 @@ def buscar_amazon(link):
         if 1 <= d <= 99:
             promocao = f"DE/POR — {d}% off"
 
-    # Badge só aceito se contiver indicação real de desconto
     if not promocao:
         badge = soup.select_one("#dealBadgeSupportingText, .a-badge-label")
         if badge:
@@ -436,7 +382,7 @@ def buscar_por_link(link):
     elif "panvel"     in d:
         return buscar_panvel(link)
     else:
-        return _html_generico(link, link.split("/")[2].replace("www.",""))
+        return _html_generico(link, link.split("/")[2].replace("www.", ""))
 
 
 def _html_generico(link, nome_site):
@@ -453,10 +399,10 @@ def _html_generico(link, nome_site):
             d = json.loads(tag.string or "")
             if isinstance(d, list):
                 d = d[0]
-            if d.get("@type") not in ("Product","IndividualProduct"):
+            if d.get("@type") not in ("Product", "IndividualProduct"):
                 continue
-            nome = d.get("name","")
-            o    = d.get("offers",{})
+            nome = d.get("name", "")
+            o    = d.get("offers", {})
             if isinstance(o, list):
                 o = o[0]
             p = o.get("price") or o.get("lowPrice")
@@ -471,8 +417,14 @@ def _html_generico(link, nome_site):
     if not nome:
         h1 = soup.select_one("h1")
         nome = h1.get_text(strip=True) if h1 else "Produto"
-    return {"site": nome_site, "nome": nome[:120], "preco": preco,
-            "preco_original": None, "promocao": None, "link": link}
+    return {
+        "site":           nome_site,
+        "nome":           nome[:120],
+        "preco":          preco,
+        "preco_original": None,
+        "promocao":       None,
+        "link":           link,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -481,6 +433,7 @@ def _html_generico(link, nome_site):
 def main():
     with open("products.json", encoding="utf-8") as f:
         produtos = json.load(f)
+
     try:
         with open("prices.json", encoding="utf-8") as f:
             historico = json.load(f)
@@ -493,6 +446,7 @@ def main():
     for produto in produtos:
         print(f"\n{'─'*55}")
         print(f"Buscando: {produto['nome']}")
+
         for link in produto.get("links", []):
             time.sleep(2)
             resultado = buscar_por_link(link)
@@ -512,6 +466,7 @@ def main():
 
     print(f"\n{'─'*55}")
     print(f"Concluido! {len(novos)} precos coletados e salvos.")
+
 
 if __name__ == "__main__":
     main()
