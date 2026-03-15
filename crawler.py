@@ -8,9 +8,17 @@ from bs4 import BeautifulSoup
 # ═══════════════════════════════════════════════════════════════
 #  CONFIGURAÇÃO
 # ═══════════════════════════════════════════════════════════════
-SCRAPERAPI_KEY = "SUA_CHAVE_AQUI"  # usado só para Amazon
+# Amazon bloqueia IPs de nuvem com CAPTCHA — desabilitada por padrão.
+# Se quiser tentar, coloque sua chave do scraperapi.com abaixo.
+SCRAPERAPI_KEY = "3a4f98804a2b98772342d286824afcd2"
 
-HEADERS_BROWSER = {
+HEADERS = {
+    "User-Agent": "price-crawler/1.0 (monitoramento de precos)",
+    "Accept": "application/json",
+    "Accept-Language": "pt-BR,pt;q=0.9",
+}
+
+HEADERS_HTML = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -20,49 +28,33 @@ HEADERS_BROWSER = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-HEADERS_JSON = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json",
-    "Accept-Language": "pt-BR,pt;q=0.9",
-}
-
 
 # ───────────────────────────────────────────────────────────────
-# Limpa string de preço → float
-# "R$ 1.299,90" → 1299.90
+# Converte "R$ 1.299,90" → 1299.90
 # ───────────────────────────────────────────────────────────────
-def limpar_preco(texto):
-    if texto is None:
+def limpar_preco(v):
+    if v is None:
         return None
-    texto = str(texto).strip()
-    # Remove símbolo e espaços
-    texto = texto.replace("R$", "").replace("\xa0", "").replace(" ", "")
-    # Remove ponto de milhar antes de vírgula decimal (1.299,90 → 1299,90)
-    texto = re.sub(r"\.(?=\d{3},)", "", texto)
-    # Troca vírgula decimal por ponto
-    texto = texto.replace(",", ".")
-    # Mantém só dígitos e ponto
-    texto = re.sub(r"[^\d.]", "", texto)
+    s = str(v).replace("R$", "").replace("\xa0", "").replace(" ", "").strip()
+    s = re.sub(r"\.(?=\d{3}[,.])", "", s)   # remove ponto de milhar
+    s = s.replace(",", ".")
+    s = re.sub(r"[^\d.]", "", s)
     try:
-        v = float(texto)
-        return v if v > 0 else None
+        f = float(s)
+        return f if 0.5 < f < 100_000 else None   # sanidade
     except ValueError:
         return None
 
 
 # ───────────────────────────────────────────────────────────────
-# Detecta promoções por padrão de texto
+# Detecta promoções especiais no texto
 # ───────────────────────────────────────────────────────────────
 PADROES_PROMO = [
     (r"(?:compre|leve)\s*(\d+)\s*(?:e\s*)?(?:pague|leve)\s*(\d+)",
      lambda m: f"Leve {m.group(1)} pague {m.group(2)}"),
     (r"(\d+)\s*%\s*(?:de\s*)?(?:desconto|off)\s*(?:na\s*)?(\d+)[ªº°]?\s*unidade",
      lambda m: f"{m.group(1)}% off na {m.group(2)}ª unidade"),
-    (r"compre\s*(\d+)\s*(?:e\s*)?pague\s*R?\$?\s*([\d\.,]+)\s*(?:em cada|por unid|cada)",
+    (r"compre\s*(\d+)\s*(?:e\s*)?pague\s*R?\$?\s*([\d.,]+)\s*(?:em cada|por unid|cada)",
      lambda m: f"Compre {m.group(1)} pague R${m.group(2)} cada"),
     (r"(\d+)\s*%\s*(?:de\s*)?(?:desconto|off)",
      lambda m: f"{m.group(1)}% off"),
@@ -73,218 +65,42 @@ PADROES_PROMO = [
 def detectar_promocao(texto):
     if not texto:
         return None
-    t = texto.lower()
-    for padrao, formatar in PADROES_PROMO:
+    t = str(texto).lower()
+    for padrao, fmt in PADROES_PROMO:
         m = re.search(padrao, t)
         if m:
             try:
-                return formatar(m)
+                return fmt(m)
             except Exception:
                 continue
     return None
 
 
 # ═══════════════════════════════════════════════════════════════
-#  VTEX API — funciona para Pague Menos, Panvel e qualquer
-#  loja na plataforma VTEX sem precisar de JavaScript
-#
-#  Como funciona: extrai o slug do produto da URL e chama
-#  diretamente a API interna do VTEX que retorna JSON com
-#  preço, estoque e promoções.
-# ═══════════════════════════════════════════════════════════════
-def buscar_vtex(link, nome_site):
-    """
-    Estratégia 1: API catalog_system (retorna preço + promoções)
-    Estratégia 2: API sp/product (fallback)
-    Estratégia 3: JSON-LD no HTML (último recurso)
-    """
-
-    # Extrai o domínio base (ex: www.paguemenos.com.br)
-    partes = link.split("/")
-    base   = "/".join(partes[:3])  # https://www.paguemenos.com.br
-
-    # Extrai o slug do produto da URL
-    # URLs VTEX geralmente terminam em /p ou /p-XXXXXX
-    slug = None
-    for parte in reversed(partes):
-        if parte and parte not in ("p",) and not parte.startswith("p-"):
-            slug = parte
-            break
-        elif parte.startswith("p-"):
-            # slug está na parte anterior
-            idx = partes.index(parte)
-            if idx > 0:
-                slug = partes[idx - 1]
-            break
-
-    # ── Estratégia 1: API VTEX catalog_system ──
-    if slug:
-        api_url = f"{base}/api/catalog_system/pub/products/search/{slug}"
-        try:
-            r = httpx.get(api_url, headers=HEADERS_JSON, timeout=20, follow_redirects=True)
-            if r.status_code == 200:
-                produtos = r.json()
-                if produtos and isinstance(produtos, list):
-                    prod = produtos[0]
-                    resultado = _extrair_vtex_produto(prod, link, nome_site)
-                    if resultado:
-                        print(f"  [{nome_site}] API VTEX funcionou")
-                        return resultado
-        except Exception as e:
-            print(f"  [{nome_site}] API catalog_system falhou: {e}")
-
-    # ── Estratégia 2: API VTEX por EAN/slug alternativo ──
-    if slug:
-        api_url2 = f"{base}/api/catalog_system/pub/products/search?fq=skuId:{slug}"
-        try:
-            r = httpx.get(api_url2, headers=HEADERS_JSON, timeout=20, follow_redirects=True)
-            if r.status_code == 200:
-                produtos = r.json()
-                if produtos and isinstance(produtos, list):
-                    prod = produtos[0]
-                    resultado = _extrair_vtex_produto(prod, link, nome_site)
-                    if resultado:
-                        print(f"  [{nome_site}] API VTEX (alt) funcionou")
-                        return resultado
-        except Exception as e:
-            print(f"  [{nome_site}] API alt falhou: {e}")
-
-    # ── Estratégia 3: HTML + JSON-LD (fallback) ──
-    print(f"  [{nome_site}] Tentando HTML + JSON-LD...")
-    try:
-        r = httpx.get(link, headers=HEADERS_BROWSER, timeout=25, follow_redirects=True)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        # JSON-LD é injetado no servidor — não precisa de JS
-        preco = None
-        nome  = None
-        for tag in soup.find_all("script", type="application/ld+json"):
-            try:
-                dados = json.loads(tag.string or "")
-                if isinstance(dados, list):
-                    dados = dados[0]
-                if dados.get("@type") not in ("Product", "IndividualProduct"):
-                    continue
-                nome = dados.get("name", "")
-                offers = dados.get("offers", {})
-                if isinstance(offers, list):
-                    offers = offers[0]
-                p = offers.get("price") or offers.get("lowPrice")
-                if p:
-                    preco = float(p)
-                    break
-            except Exception:
-                continue
-
-        if not preco:
-            print(f"  [{nome_site}] JSON-LD não encontrado, tentando seletores...")
-            # Tenta seletores VTEX genéricos
-            for sel in [
-                ".vtex-product-price-1-x-sellingPrice .vtex-product-price-1-x-currencyContainer",
-                ".vtex-product-price-1-x-sellingPrice",
-                "[class*='sellingPrice']",
-                "[class*='best-price']",
-                "[class*='bestPrice']",
-            ]:
-                el = soup.select_one(sel)
-                if el:
-                    txt = el.get_text(strip=True)
-                    # Só aceita se contém padrão de moeda
-                    if re.search(r"\d+[,\.]\d{2}", txt):
-                        preco = limpar_preco(txt)
-                        if preco and 1 < preco < 100000:
-                            break
-                        preco = None
-
-        if not preco:
-            print(f"  [{nome_site}] Preço não encontrado")
-            return None
-
-        if not nome:
-            nome_el = soup.select_one("h1")
-            nome = nome_el.get_text(strip=True) if nome_el else "Produto"
-
-        # Promoção no texto da página
-        promocao = detectar_promocao(soup.get_text(" "))
-
-        return {
-            "site": nome_site,
-            "nome": nome[:120],
-            "preco": preco,
-            "preco_original": None,
-            "promocao": promocao,
-            "link": link,
-        }
-
-    except Exception as e:
-        print(f"  [{nome_site}] HTML falhou: {e}")
-        return None
-
-
-def _extrair_vtex_produto(prod, link, nome_site):
-    """Extrai preço e promoção do JSON retornado pela API VTEX"""
-    nome = prod.get("productName", "Produto")
-
-    # Pega o primeiro SKU disponível
-    items = prod.get("items", [])
-    if not items:
-        return None
-
-    sku    = items[0]
-    offers = sku.get("sellers", [{}])[0].get("commertialOffer", {})
-
-    preco          = offers.get("Price")
-    preco_original = offers.get("ListPrice")
-
-    if not preco or preco == 0:
-        return None
-
-    # Sanidade: ignora preços obviamente errados (CEP, código, etc.)
-    if preco > 99999 or preco < 0.5:
-        return None
-
-    promocao = None
-
-    # DE/POR
-    if preco_original and preco_original > preco:
-        desconto = round((1 - preco / preco_original) * 100)
-        if 1 <= desconto <= 99:
-            promocao = f"DE/POR — {desconto}% off"
-
-    # Teasers = promoções especiais (ex: "Leve 3 pague 2", brinde, etc.)
-    teasers = offers.get("Teasers", [])
-    for t in teasers:
-        nome_teaser = t.get("name", "") or t.get("<Name>k__BackingField", "")
-        if nome_teaser:
-            promo_detectada = detectar_promocao(nome_teaser)
-            promocao = promo_detectada or nome_teaser[:80]
-            break
-
-    # Se ainda não tem promoção, tenta detectar no nome do produto
-    if not promocao:
-        promocao = detectar_promocao(nome)
-
-    return {
-        "site": nome_site,
-        "nome": nome[:120],
-        "preco": float(preco),
-        "preco_original": float(preco_original) if preco_original else None,
-        "promocao": promocao,
-        "link": link,
-    }
-
-
-# ═══════════════════════════════════════════════════════════════
-#  MERCADO LIVRE — API oficial (gratuita, sem chave)
+#  MERCADO LIVRE
+#  CORREÇÃO: busca por nome (não EAN) — EAN causa 403
+#  A API pública exige User-Agent de aplicação, não de browser
 # ═══════════════════════════════════════════════════════════════
 def buscar_mercadolivre(nome, ean):
-    query = ean if ean else nome
-    url   = f"https://api.mercadolibre.com/sites/MLB/search?q={query}&limit=5"
-    try:
-        r = httpx.get(url, timeout=15)
-        r.raise_for_status()
-    except Exception as e:
-        print(f"  [ML] Erro: {e}")
+    # Busca por nome — mais resultados e sem o 403 que EAN causava
+    r = None
+    for query in [nome, ean] if ean else [nome]:
+        try:
+            r = httpx.get(
+                "https://api.mercadolibre.com/sites/MLB/search",
+                params={"q": query, "limit": 5},
+                headers=HEADERS,
+                timeout=15,
+            )
+            if r.status_code == 200:
+                break
+            print(f"  [ML] status {r.status_code} para query '{query}', tentando próxima...")
+        except Exception as e:
+            print(f"  [ML] Erro: {e}")
+            return []
+
+    if not r or r.status_code != 200:
+        print(f"  [ML] Falhou após todas as tentativas")
         return []
 
     resultados = []
@@ -294,9 +110,9 @@ def buscar_mercadolivre(nome, ean):
         promocao       = None
 
         if preco_original and preco_original > preco:
-            desconto = round((1 - preco / preco_original) * 100)
-            if 1 <= desconto <= 99:
-                promocao = f"DE/POR — {desconto}% off"
+            d = round((1 - preco / preco_original) * 100)
+            if 1 <= d <= 99:
+                promocao = f"DE/POR — {d}% off"
 
         for tag in item.get("promotions", []):
             label = tag.get("name", "")
@@ -307,36 +123,210 @@ def buscar_mercadolivre(nome, ean):
             promocao = detectar_promocao(item.get("title", ""))
 
         resultados.append({
-            "site": "Mercado Livre",
-            "nome": item["title"],
-            "preco": preco,
+            "site":           "Mercado Livre",
+            "nome":           item["title"],
+            "preco":          preco,
             "preco_original": preco_original,
-            "promocao": promocao,
-            "link": item["permalink"],
+            "promocao":       promocao,
+            "link":           item["permalink"],
         })
     return resultados
 
 
 # ═══════════════════════════════════════════════════════════════
-#  AMAZON — usa ScraperAPI para contornar bloqueio no Actions
+#  VTEX API — Pague Menos e Panvel
+#
+#  CORREÇÃO Pague Menos: "70% off" vinha do texto da página
+#  (era a tag de desconto do site, não o desconto real do produto).
+#  Agora usa APENAS os Teasers da API VTEX ou DE/POR calculado.
+#
+#  CORREÇÃO Panvel: extraia o ID numérico do final da URL (p-485500)
+#  e chama /api/catalog_system/pub/products/search?fq=productId:485500
+# ═══════════════════════════════════════════════════════════════
+def buscar_vtex(link, nome_site):
+    partes = link.rstrip("/").split("/")
+    base   = "/".join(partes[:3])
+    ultimo = partes[-1]   # ex: "p-485500" ou "aptanutri-3-premium-800g"
+
+    # Extrai ID numérico se a URL termina em p-XXXXX (padrão Panvel)
+    product_id = None
+    m = re.search(r"p-(\d+)$", ultimo)
+    if m:
+        product_id = m.group(1)
+
+    # Slug de texto (padrão Pague Menos: termina em /p)
+    slug = None
+    if ultimo == "p" and len(partes) >= 2:
+        slug = partes[-2]   # a parte antes do /p
+    elif ultimo != "p" and not product_id:
+        slug = ultimo
+
+    # ── Tentativa 1: por productId (Panvel) ──
+    if product_id:
+        resultado = _vtex_api(
+            base,
+            f"/api/catalog_system/pub/products/search?fq=productId:{product_id}",
+            link, nome_site, "productId"
+        )
+        if resultado:
+            return resultado
+
+    # ── Tentativa 2: por slug de texto (Pague Menos) ──
+    if slug:
+        resultado = _vtex_api(
+            base,
+            f"/api/catalog_system/pub/products/search/{slug}",
+            link, nome_site, "slug"
+        )
+        if resultado:
+            return resultado
+
+    # ── Tentativa 3: HTML + JSON-LD (fallback) ──
+    print(f"  [{nome_site}] API falhou, tentando HTML...")
+    return _vtex_html(link, nome_site)
+
+
+def _vtex_api(base, path, link, nome_site, modo):
+    """Chama a API interna do VTEX e extrai preço + promoções dos Teasers."""
+    try:
+        r = httpx.get(
+            base + path,
+            headers=HEADERS,
+            timeout=20,
+            follow_redirects=True,
+        )
+        if r.status_code != 200 or not r.text.strip():
+            return None
+        produtos = r.json()
+        if not isinstance(produtos, list) or not produtos:
+            return None
+    except Exception as e:
+        print(f"  [{nome_site}] API ({modo}) erro: {e}")
+        return None
+
+    prod  = produtos[0]
+    nome  = prod.get("productName", "Produto")
+    items = prod.get("items", [])
+    if not items:
+        return None
+
+    offer = items[0].get("sellers", [{}])[0].get("commertialOffer", {})
+    preco          = limpar_preco(offer.get("Price"))
+    preco_original = limpar_preco(offer.get("ListPrice"))
+
+    if not preco:
+        return None
+
+    # Ignora preco_original igual ao preco (sem desconto real)
+    if preco_original and abs(preco_original - preco) < 0.01:
+        preco_original = None
+
+    # Promoção via Teasers (promoções configuradas no painel VTEX)
+    # Ex: "Leve 2 pague 1", "30% off na 2ª unidade", brinde, etc.
+    promocao = None
+    for teaser in offer.get("Teasers", []):
+        # Teasers podem vir em formatos diferentes dependendo da versão VTEX
+        nome_t = (
+            teaser.get("name") or
+            teaser.get("<Name>k__BackingField") or
+            teaser.get("Name") or ""
+        )
+        if nome_t:
+            promo_detectada = detectar_promocao(nome_t)
+            promocao = promo_detectada or nome_t[:80]
+            break
+
+    # Fallback DE/POR calculado (só aceita se desconto entre 1% e 99%)
+    if not promocao and preco_original and preco_original > preco:
+        d = round((1 - preco / preco_original) * 100)
+        if 1 <= d <= 99:
+            promocao = f"DE/POR — {d}% off"
+
+    print(f"  [{nome_site}] API VTEX ({modo}) OK")
+    return {
+        "site":           nome_site,
+        "nome":           nome[:120],
+        "preco":          preco,
+        "preco_original": preco_original,
+        "promocao":       promocao,
+        "link":           link,
+    }
+
+
+def _vtex_html(link, nome_site):
+    """Fallback: lê o HTML e extrai preço via JSON-LD injetado no servidor."""
+    try:
+        r    = httpx.get(link, headers=HEADERS_HTML, timeout=25, follow_redirects=True)
+        soup = BeautifulSoup(r.text, "html.parser")
+    except Exception as e:
+        print(f"  [{nome_site}] HTML erro: {e}")
+        return None
+
+    preco = None
+    nome  = None
+
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            d = json.loads(tag.string or "")
+            if isinstance(d, list):
+                d = d[0]
+            if d.get("@type") not in ("Product", "IndividualProduct"):
+                continue
+            nome = d.get("name", "")
+            o    = d.get("offers", {})
+            if isinstance(o, list):
+                o = o[0]
+            p = o.get("price") or o.get("lowPrice")
+            if p:
+                preco = limpar_preco(p)
+                if preco:
+                    break
+        except Exception:
+            continue
+
+    if not preco:
+        print(f"  [{nome_site}] JSON-LD não encontrado")
+        return None
+
+    if not nome:
+        h1 = soup.select_one("h1")
+        nome = h1.get_text(strip=True) if h1 else "Produto"
+
+    return {
+        "site":           nome_site,
+        "nome":           nome[:120],
+        "preco":          preco,
+        "preco_original": None,
+        "promocao":       detectar_promocao(soup.get_text(" ")),
+        "link":           link,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  AMAZON
+#  Bloqueada por CAPTCHA no GitHub Actions sem ScraperAPI.
+#  Mantida no código — funciona se ScraperAPI estiver configurado.
 # ═══════════════════════════════════════════════════════════════
 def buscar_amazon(link):
     link = link.replace("https://amazon.com.br", "https://www.amazon.com.br")
 
-    # Monta URL via ScraperAPI se configurado
-    fetch_url = link
-    if SCRAPERAPI_KEY and SCRAPERAPI_KEY != "SUA_CHAVE_AQUI":
-        fetch_url = f"https://api.scraperapi.com/?api_key={SCRAPERAPI_KEY}&url={link}&country_code=br"
+    if not SCRAPERAPI_KEY or SCRAPERAPI_KEY == "SUA_CHAVE_AQUI":
+        print(f"  [Amazon] ScraperAPI não configurado — pulando")
+        return None
 
+    fetch_url = (
+        f"https://api.scraperapi.com/"
+        f"?api_key={SCRAPERAPI_KEY}&url={link}&country_code=br"
+    )
     try:
-        r    = httpx.get(fetch_url, headers=HEADERS_BROWSER, timeout=30, follow_redirects=True)
+        r    = httpx.get(fetch_url, headers=HEADERS_HTML, timeout=35, follow_redirects=True)
         soup = BeautifulSoup(r.text, "html.parser")
     except Exception as e:
         print(f"  [Amazon] Erro: {e}")
         return None
 
-    if "captcha" in r.text.lower() or "robot check" in r.text.lower():
-        print(f"  [Amazon] Bloqueado por CAPTCHA")
+    if "captcha" in r.text.lower():
+        print(f"  [Amazon] CAPTCHA mesmo com ScraperAPI")
         return None
 
     nome_el = soup.find(id="productTitle")
@@ -346,18 +336,14 @@ def buscar_amazon(link):
     for sel in [
         "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
         ".a-price.aok-align-center .a-offscreen",
-        "#priceblock_ourprice",
-        "#priceblock_dealprice",
         ".a-price .a-offscreen",
     ]:
         el = soup.select_one(sel)
         if el:
-            v = limpar_preco(el.get_text())
-            if v and 1 < v < 100000:
-                preco = v
+            preco = limpar_preco(el.get_text())
+            if preco:
                 break
 
-    # Fallback JSON-LD
     if not preco:
         for tag in soup.find_all("script", type="application/ld+json"):
             try:
@@ -367,12 +353,9 @@ def buscar_amazon(link):
                 o = d.get("offers", {})
                 if isinstance(o, list):
                     o = o[0]
-                p = o.get("price")
-                if p:
-                    v = float(p)
-                    if 1 < v < 100000:
-                        preco = v
-                        break
+                preco = limpar_preco(o.get("price"))
+                if preco:
+                    break
             except Exception:
                 continue
 
@@ -381,37 +364,29 @@ def buscar_amazon(link):
         return None
 
     preco_original = None
-    for sel in [".a-text-price .a-offscreen", "#priceblock_listprice"]:
-        el = soup.select_one(sel)
-        if el:
-            v = limpar_preco(el.get_text())
-            if v and v > preco:
-                preco_original = v
-                break
+    el = soup.select_one(".a-text-price .a-offscreen")
+    if el:
+        v = limpar_preco(el.get_text())
+        if v and v > preco:
+            preco_original = v
 
     promocao = None
     if preco_original:
-        desconto = round((1 - preco / preco_original) * 100)
-        if 1 <= desconto <= 99:
-            promocao = f"DE/POR — {desconto}% off"
-
+        d = round((1 - preco / preco_original) * 100)
+        if 1 <= d <= 99:
+            promocao = f"DE/POR — {d}% off"
     if not promocao:
         badge = soup.select_one("#dealBadgeSupportingText, .a-badge-label")
         if badge:
-            txt = badge.get_text(strip=True)
-            if txt:
-                promocao = txt
-
-    if not promocao:
-        promocao = detectar_promocao(soup.get_text())
+            promocao = badge.get_text(strip=True) or None
 
     return {
-        "site": "Amazon Brasil",
-        "nome": nome,
-        "preco": preco,
+        "site":           "Amazon Brasil",
+        "nome":           nome,
+        "preco":          preco,
         "preco_original": preco_original,
-        "promocao": promocao,
-        "link": link,
+        "promocao":       promocao,
+        "link":           link,
     }
 
 
@@ -420,11 +395,11 @@ def buscar_amazon(link):
 # ═══════════════════════════════════════════════════════════════
 def buscar_por_link(link):
     d = link.lower()
-    if "amazon"     in d:
+    if "amazon"      in d:
         return buscar_amazon(link)
     elif "paguemenos" in d:
         return buscar_vtex(link, "Pague Menos")
-    elif "panvel"   in d:
+    elif "panvel"    in d:
         return buscar_vtex(link, "Panvel")
     else:
         return buscar_vtex(link, link.split("/")[2].replace("www.", ""))
