@@ -7,8 +7,6 @@ from bs4 import BeautifulSoup
 
 # ═══════════════════════════════════════════════════════════════
 #  CONFIGURAÇÃO
-#  ScraperAPI gratuito em scraperapi.com (5.000 req/mês)
-#  Necessário para Amazon. Panvel e Pague Menos funcionam sem ele.
 # ═══════════════════════════════════════════════════════════════
 SCRAPERAPI_KEY = "3a4f98804a2b98772342d286824afcd2"
 
@@ -29,9 +27,6 @@ HEADERS_HTML = {
 }
 
 
-# ───────────────────────────────────────────────────────────────
-# Converte "R$ 1.299,90" → 1299.90
-# ───────────────────────────────────────────────────────────────
 def limpar_preco(v):
     if v is None:
         return None
@@ -46,9 +41,6 @@ def limpar_preco(v):
         return None
 
 
-# ───────────────────────────────────────────────────────────────
-# Detecta promoções especiais no texto
-# ───────────────────────────────────────────────────────────────
 PADROES_PROMO = [
     (r"(?:compre|leve)\s*(\d+)\s*(?:e\s*)?(?:pague|leve)\s*(\d+)",
      lambda m: f"Leve {m.group(1)} pague {m.group(2)}"),
@@ -77,79 +69,128 @@ def detectar_promocao(texto):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  PAGUE MENOS — plataforma VTEX
-#  URL termina em /slug-do-produto/p
-#  API: /api/catalog_system/pub/products/search/slug
+#  PANVEL
+#
+#  Tipo A — DE/POR (tag="PROMOTION" + promotionId presente):
+#    → preço = total das parcelas (Nx de R$ Y = N*Y)
+#    → pricePerUnit ignorado
+#    → promoção = "DE/POR"
+#
+#  Tipo B — Leve Mais (sem tag, sem promotionId):
+#    → preço = pricePerUnit (preço por unidade na promoção)
+#    → promoção = "Leve mais, pague menos"
+# ═══════════════════════════════════════════════════════════════
+def buscar_panvel(link):
+    try:
+        r = httpx.get(link, headers=HEADERS_HTML, timeout=25, follow_redirects=True)
+        html = r.text
+    except Exception as e:
+        print(f"  [Panvel] Erro: {e}")
+        return None
+
+    m = re.search(r'p-(\d+)$', link.rstrip('/'))
+    if not m:
+        print(f"  [Panvel] ID não encontrado na URL")
+        return None
+    pid = m.group(1)
+
+    chave = f'"G.json.api/v2/catalog/{pid}?type=SSR"'
+    idx   = html.find(chave)
+    if idx == -1:
+        print(f"  [Panvel] Bloco JSON não encontrado")
+        return None
+
+    trecho = html[max(0, idx - 3000):idx]
+
+    # ── Tipo de promoção ─────────────────────────────────────
+    is_de_por = '"PROMOTION"' in trecho and bool(
+        re.search(r'"promotionId"\s*:\s*\d+', trecho)
+    )
+
+    # ── Preço total via parcelas (usado no DE/POR) ───────────
+    preco_parcelas = None
+    m_inst = re.search(
+        r'"installments"\s*:\s*"ou\s*(\d+)x\s*de\s*R\$[\xa0\s]*([\d,.]+)"',
+        trecho
+    )
+    if m_inst:
+        qtd  = int(m_inst.group(1))
+        parc = limpar_preco(m_inst.group(2))
+        if parc:
+            preco_parcelas = round(parc * qtd, 2)
+
+    # ── pricePerUnit (usado no Leve Mais) ────────────────────
+    preco_unit = None
+    m_pu = re.search(r'"pricePerUnit"\s*:\s*([\d.]+)', trecho)
+    if m_pu:
+        preco_unit = limpar_preco(m_pu.group(1))
+
+    # ── Define preço principal conforme tipo ─────────────────
+    if is_de_por:
+        # DE/POR: usa preço total das parcelas, ignora pricePerUnit
+        preco = preco_parcelas
+        promocao = "DE/POR"
+    else:
+        # Leve Mais: usa pricePerUnit como preço por unidade
+        preco = preco_unit
+        promocao = "Leve mais, pague menos"
+
+    if not preco:
+        # Último fallback: qualquer preço disponível
+        preco = preco_parcelas or preco_unit
+        if not preco:
+            print(f"  [Panvel] Nenhum preço encontrado")
+            return None
+
+    # ── Nome do produto ──────────────────────────────────────
+    nome = None
+    m_nome = re.search(
+        rf'"G\.json\.api/v2/catalog/{pid}\?type=SSR"\s*:\s*\{{"body"\s*:\s*\{{[^{{}}]{{0,50}}"name"\s*:\s*"([^"]+)"',
+        html
+    )
+    if m_nome:
+        nome = m_nome.group(1)
+    else:
+        soup  = BeautifulSoup(html, "html.parser")
+        title = soup.find("title")
+        if title:
+            nome = title.get_text(strip=True)\
+                        .replace(" | Panvel Farmácias", "")\
+                        .replace(" | Panvel", "").strip()
+    nome = (nome or "Produto Panvel")[:120]
+
+    return {
+        "site":           "Panvel",
+        "nome":           nome,
+        "preco":          preco,
+        "preco_original": None,
+        "promocao":       promocao,
+        "link":           link,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  PAGUE MENOS — VTEX
 # ═══════════════════════════════════════════════════════════════
 def buscar_paguemenos(link):
     partes = link.rstrip("/").split("/")
     base   = f"https://{partes[2]}"
+    slug   = partes[-2] if partes[-1] == "p" else partes[-1]
 
-    # Slug é a parte antes do /p final
-    slug = partes[-2] if partes[-1] == "p" else partes[-1]
-
-    # Tenta API VTEX pelo slug
-    api_url = f"{base}/api/catalog_system/pub/products/search/{slug}"
-    resultado = _vtex_api(api_url, link, "Pague Menos")
+    resultado = _vtex_api(
+        f"{base}/api/catalog_system/pub/products/search/{slug}",
+        link, "Pague Menos"
+    )
     if resultado:
         return resultado
 
-    # Fallback: HTML + JSON-LD
     print(f"  [Pague Menos] API falhou, tentando HTML...")
     return _vtex_html(link, "Pague Menos")
 
 
-# ═══════════════════════════════════════════════════════════════
-#  PANVEL — plataforma VTEX
-#  URL: /panvel/nome-do-produto/p-485500
-#  O número após p- é o productId
-#  APIs tentadas em sequência até uma funcionar
-# ═══════════════════════════════════════════════════════════════
-def buscar_panvel(link):
-    partes = link.rstrip("/").split("/")
-    base   = f"https://{partes[2]}"   # https://www.panvel.com
-    ultimo = partes[-1]               # p-485500
-
-    # Extrai o productId numérico
-    m = re.search(r"p-(\d+)$", ultimo)
-    product_id = m.group(1) if m else None
-
-    # Extrai o slug de texto (parte antes do p-XXXXX)
-    slug = partes[-2] if product_id else ultimo
-
-    apis = []
-    if product_id:
-        # Variação 1: API padrão VTEX com productId
-        apis.append(f"{base}/api/catalog_system/pub/products/search?fq=productId:{product_id}")
-        # Variação 2: alguns sites Panvel respondem com o nome da conta no path
-        apis.append(f"{base}/panvel/api/catalog_system/pub/products/search?fq=productId:{product_id}")
-        # Variação 3: busca por skuId
-        apis.append(f"{base}/api/catalog_system/pub/products/search?fq=skuId:{product_id}")
-    if slug:
-        # Variação 4: busca pelo slug de texto
-        apis.append(f"{base}/api/catalog_system/pub/products/search/{slug}")
-
-    for api_url in apis:
-        resultado = _vtex_api(api_url, link, "Panvel")
-        if resultado:
-            return resultado
-
-    # Fallback HTML
-    print(f"  [Panvel] Todas as APIs falharam, tentando HTML...")
-    return _vtex_html(link, "Panvel")
-
-
-# ───────────────────────────────────────────────────────────────
-# Chama a API VTEX e extrai preço + promoções
-# ───────────────────────────────────────────────────────────────
 def _vtex_api(api_url, link, nome_site):
     try:
-        r = httpx.get(
-            api_url,
-            headers=HEADERS_JSON,
-            timeout=20,
-            follow_redirects=True,
-        )
+        r = httpx.get(api_url, headers=HEADERS_JSON, timeout=20, follow_redirects=True)
         if r.status_code != 200:
             return None
         data = r.json()
@@ -174,7 +215,6 @@ def _vtex_api(api_url, link, nome_site):
     if preco_original and abs(preco_original - preco) < 0.01:
         preco_original = None
 
-    # Promoções via Teasers VTEX — única fonte confiável
     promocao = None
     for teaser in offer.get("Teasers", []):
         nome_t = (
@@ -201,10 +241,6 @@ def _vtex_api(api_url, link, nome_site):
     }
 
 
-# ───────────────────────────────────────────────────────────────
-# Fallback HTML — lê JSON-LD e __STATE__ sem executar JavaScript
-# NÃO usa texto livre da página (evita promoções falsas)
-# ───────────────────────────────────────────────────────────────
 def _vtex_html(link, nome_site):
     try:
         r    = httpx.get(link, headers=HEADERS_HTML, timeout=25, follow_redirects=True)
@@ -216,7 +252,6 @@ def _vtex_html(link, nome_site):
     preco = None
     nome  = None
 
-    # Tenta JSON-LD primeiro
     for tag in soup.find_all("script", type="application/ld+json"):
         try:
             d = json.loads(tag.string or "")
@@ -236,7 +271,6 @@ def _vtex_html(link, nome_site):
         except Exception:
             continue
 
-    # Tenta __STATE__ (dados VTEX embutidos no HTML)
     if not preco:
         for s in soup.find_all("script"):
             txt = s.string or ""
@@ -260,7 +294,6 @@ def _vtex_html(link, nome_site):
         h1 = soup.select_one("h1")
         nome = h1.get_text(strip=True) if h1 else "Produto"
 
-    # Promoção via Teasers no __STATE__
     promocao = None
     for s in soup.find_all("script"):
         txt = s.string or ""
@@ -286,7 +319,6 @@ def _vtex_html(link, nome_site):
 
 # ═══════════════════════════════════════════════════════════════
 #  AMAZON
-#  Requer ScraperAPI para funcionar no GitHub Actions
 # ═══════════════════════════════════════════════════════════════
 def buscar_amazon(link):
     link = link.replace("https://amazon.com.br", "https://www.amazon.com.br")
@@ -385,7 +417,6 @@ def buscar_por_link(link):
     elif "panvel"     in d:
         return buscar_panvel(link)
     else:
-        # Genérico: tenta VTEX e se não funcionar usa HTML
         nome_site = link.split("/")[2].replace("www.", "")
         return _vtex_html(link, nome_site)
 
