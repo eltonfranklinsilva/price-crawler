@@ -261,14 +261,14 @@
 
 <script>
   // ══════════════════════════════════════════════════════
-  //  CONFIGURAÇÃO — substitua pelos seus dados
+  //  CONFIGURAÇÃO
   // ══════════════════════════════════════════════════════
-  const GITHUB_USER     = "eltonfranklinsilva";        // ex: eltonfranklinsilva
-  const GITHUB_REPO     = "price-crawler";
-  const GITHUB_TOKEN    = "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";     // token com permissão workflow
-  const WORKFLOW_FILE   = "crawl.yml";
-  const GITHUB_BRANCH   = "main";
+  const GITHUB_USER    = "eltonfranklinsilva";
+  const GITHUB_REPO    = "price-crawler";
+  const GITHUB_TOKEN   = "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";
+  const DISPATCH_SENHA = "1234";
   // ══════════════════════════════════════════════════════
+
   let dados     = [];
   let modoPromo = 'todos';
   let abaAtiva  = 'tabela';
@@ -282,19 +282,15 @@
     setTimeout(() => t.className = 'toast', 3500);
   }
 
-  // ── Disparar workflow via API do GitHub ───────────────
+  // ── Disparar workflow via repository_dispatch ─────────
   async function rodarCrawler() {
-    if (GITHUB_TOKEN === 'SEU_TOKEN_AQUI' || GITHUB_USER === 'SEU_USUARIO') {
-      mostrarToast('Configure GITHUB_USER e GITHUB_TOKEN no index.html', 'erro');
-      return;
-    }
     const btn = document.getElementById('btn-run');
     btn.disabled = true;
     btn.classList.add('rodando');
     btn.textContent = '⟳ Iniciando...';
     try {
       const resp = await fetch(
-        `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+        `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/dispatches`,
         {
           method: 'POST',
           headers: {
@@ -302,11 +298,14 @@
             'Accept': 'application/vnd.github+json',
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ ref: GITHUB_BRANCH }),
+          body: JSON.stringify({
+            event_type: 'run-crawler',
+            client_payload: { senha: DISPATCH_SENHA }
+          }),
         }
       );
       if (resp.status === 204) {
-        mostrarToast('✓ Crawler iniciado! Aguarde ~3 minutos e recarregue a página.', 'sucesso');
+        mostrarToast('✓ Crawler iniciado! Aguarde ~3 minutos e recarregue.', 'sucesso');
         btn.textContent = '✓ Iniciado';
         setTimeout(() => {
           btn.disabled = false;
