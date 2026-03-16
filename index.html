@@ -265,7 +265,7 @@
   // ══════════════════════════════════════════════════════
   const GITHUB_USER    = "eltonfranklinsilva";
   const GITHUB_REPO    = "price-crawler";
-  const GITHUB_TOKEN   = "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";
+  const GITHUB_TOKEN   = "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";
   const DISPATCH_SENHA = "1234";
   // ══════════════════════════════════════════════════════
 
@@ -290,7 +290,7 @@
     btn.textContent = '⟳ Iniciando...';
     try {
       const resp = await fetch(
-        `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/dispatches`,
+  `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/actions/workflows/crawl.yml/dispatches`,
         {
           method: 'POST',
           headers: {
