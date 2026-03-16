@@ -263,16 +263,37 @@
   // ══════════════════════════════════════════════════════
   //  CONFIGURAÇÃO
   // ══════════════════════════════════════════════════════
-  const GITHUB_USER    = "eltonfranklinsilva";
-  const GITHUB_REPO    = "price-crawler";
-  const GITHUB_TOKEN   = "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";
-  const DISPATCH_SENHA = "1234";
+  const GITHUB_USER = "eltonfranklinsilva";
+  const GITHUB_REPO = "price-crawler";
   // ══════════════════════════════════════════════════════
 
   let dados     = [];
   let modoPromo = 'todos';
   let abaAtiva  = 'tabela';
   const hoje = new Date().toISOString().split('T')[0];
+
+  // ── Token — salvo no localStorage do navegador ────────
+  function getToken() {
+    let token = localStorage.getItem('gh_token');
+    if (!token) {
+      token = prompt(
+        'Cole seu GitHub Personal Access Token (com permissão repo):\n' +
+        '(Será salvo só neste navegador, nunca enviado a nenhum servidor)'
+      );
+      if (token && token.trim().startsWith('ghp_')) {
+        localStorage.setItem('gh_token', token.trim());
+      } else if (token) {
+        mostrarToast('Token inválido — deve começar com ghp_', 'erro');
+        return null;
+      }
+    }
+    return token;
+  }
+
+  function limparToken() {
+    localStorage.removeItem('gh_token');
+    mostrarToast('Token removido. Próximo clique pedirá novo token.', '');
+  }
 
   // ── Toast ─────────────────────────────────────────────
   function mostrarToast(msg, tipo) {
@@ -282,26 +303,26 @@
     setTimeout(() => t.className = 'toast', 3500);
   }
 
-  // ── Disparar workflow via repository_dispatch ─────────
+  // ── Disparar workflow via workflow_dispatch ───────────
   async function rodarCrawler() {
+    const token = getToken();
+    if (!token) return;
+
     const btn = document.getElementById('btn-run');
     btn.disabled = true;
     btn.classList.add('rodando');
     btn.textContent = '⟳ Iniciando...';
     try {
       const resp = await fetch(
-  `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/actions/workflows/crawl.yml/dispatches`,
+        `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/actions/workflows/crawl.yml/dispatches`,
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${GITHUB_TOKEN}`,
+            'Authorization': `Bearer ${token}`,
             'Accept': 'application/vnd.github+json',
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            event_type: 'run-crawler',
-            client_payload: { senha: DISPATCH_SENHA }
-          }),
+          body: JSON.stringify({ ref: 'main' }),
         }
       );
       if (resp.status === 204) {
@@ -312,9 +333,16 @@
           btn.classList.remove('rodando');
           btn.innerHTML = '&#9654; Atualizar agora';
         }, 180_000);
+      } else if (resp.status === 401) {
+        // Token inválido ou revogado — limpa e pede novo
+        localStorage.removeItem('gh_token');
+        mostrarToast('Token inválido ou expirado — clique novamente para inserir um novo.', 'erro');
+        btn.disabled = false;
+        btn.classList.remove('rodando');
+        btn.innerHTML = '&#9654; Atualizar agora';
       } else {
         const err = await resp.json().catch(() => ({}));
-        mostrarToast('Erro ' + resp.status + ': ' + (err.message || 'verifique o token'), 'erro');
+        mostrarToast('Erro ' + resp.status + ': ' + (err.message || 'tente novamente'), 'erro');
         btn.disabled = false;
         btn.classList.remove('rodando');
         btn.innerHTML = '&#9654; Atualizar agora';
