@@ -118,6 +118,19 @@
     .btn-danger { background:rgba(255,95,109,.08); border:1px solid rgba(255,95,109,.25); color:var(--danger); font-family:var(--mono); font-size:11px; font-weight:500; padding:8px 14px; border-radius:var(--r); cursor:pointer; transition:all .15s; }
     .btn-danger:hover { background:rgba(255,95,109,.15); }
 
+    /* Botão de rodar crawler */
+    .btn-run { background:rgba(79,255,176,.08); border:1px solid rgba(79,255,176,.25); color:var(--accent); font-family:var(--mono); font-size:11px; font-weight:500; padding:8px 14px; border-radius:var(--r); cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:6px; }
+    .btn-run:hover:not(:disabled) { background:rgba(79,255,176,.15); }
+    .btn-run:disabled { opacity:.4; cursor:not-allowed; }
+    .btn-run.rodando { animation:pulse-btn 1s ease-in-out infinite; }
+    @keyframes pulse-btn { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+    /* Toast de notificação */
+    .toast { position:fixed; bottom:24px; right:24px; background:var(--bg2); border:1px solid var(--border2); border-radius:var(--r); padding:12px 18px; font-family:var(--mono); font-size:12px; color:var(--text); z-index:300; opacity:0; transform:translateY(8px); transition:all .3s; pointer-events:none; }
+    .toast.show { opacity:1; transform:translateY(0); }
+    .toast.sucesso { border-color:rgba(79,255,176,.4); color:var(--accent); }
+    .toast.erro    { border-color:rgba(255,95,109,.4); color:var(--danger); }
+
     /* Modal */
     .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:200; align-items:center; justify-content:center; }
     .modal-overlay.open { display:flex; }
@@ -169,8 +182,9 @@
 
 <header>
   <div class="logo"><div class="logo-dot"></div>Price Crawler</div>
-  <div style="display:flex;align-items:center;gap:16px">
+  <div style="display:flex;align-items:center;gap:12px">
     <div class="last-update" id="last-update">—</div>
+    <button class="btn-run" id="btn-run" onclick="rodarCrawler()">&#9654; Atualizar agora</button>
     <button class="btn-danger" onclick="abrirModal()">Limpar histórico</button>
   </div>
 </header>
@@ -242,11 +256,77 @@
 
 </main>
 
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
 <script>
-  let dados = [];
+  // ══════════════════════════════════════════════════════
+  //  CONFIGURAÇÃO — substitua pelos seus dados
+  // ══════════════════════════════════════════════════════
+  const GITHUB_USER     = "eltonfranklinsilva";        // ex: eltonfranklinsilva
+  const GITHUB_REPO     = "price-crawler";
+  const GITHUB_TOKEN    = "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";     // token com permissão workflow
+  const WORKFLOW_FILE   = "crawl.yml";
+  const GITHUB_BRANCH   = "main";
+  // ══════════════════════════════════════════════════════
+  let dados     = [];
   let modoPromo = 'todos';
-  let abaAtiva = 'tabela';
+  let abaAtiva  = 'tabela';
   const hoje = new Date().toISOString().split('T')[0];
+
+  // ── Toast ─────────────────────────────────────────────
+  function mostrarToast(msg, tipo) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + (tipo || '');
+    setTimeout(() => t.className = 'toast', 3500);
+  }
+
+  // ── Disparar workflow via API do GitHub ───────────────
+  async function rodarCrawler() {
+    if (GITHUB_TOKEN === 'SEU_TOKEN_AQUI' || GITHUB_USER === 'SEU_USUARIO') {
+      mostrarToast('Configure GITHUB_USER e GITHUB_TOKEN no index.html', 'erro');
+      return;
+    }
+    const btn = document.getElementById('btn-run');
+    btn.disabled = true;
+    btn.classList.add('rodando');
+    btn.textContent = '⟳ Iniciando...';
+    try {
+      const resp = await fetch(
+        `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${GITHUB_TOKEN}`,
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ref: GITHUB_BRANCH }),
+        }
+      );
+      if (resp.status === 204) {
+        mostrarToast('✓ Crawler iniciado! Aguarde ~3 minutos e recarregue a página.', 'sucesso');
+        btn.textContent = '✓ Iniciado';
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.classList.remove('rodando');
+          btn.innerHTML = '&#9654; Atualizar agora';
+        }, 180_000);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        mostrarToast('Erro ' + resp.status + ': ' + (err.message || 'verifique o token'), 'erro');
+        btn.disabled = false;
+        btn.classList.remove('rodando');
+        btn.innerHTML = '&#9654; Atualizar agora';
+      }
+    } catch(e) {
+      mostrarToast('Erro de conexão — verifique sua internet', 'erro');
+      btn.disabled = false;
+      btn.classList.remove('rodando');
+      btn.innerHTML = '&#9654; Atualizar agora';
+    }
+  }
 
   fetch('prices.json')
     .then(r => { if (!r.ok) throw new Error(); return r.json(); })
